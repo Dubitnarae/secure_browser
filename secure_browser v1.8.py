@@ -9,23 +9,24 @@ from ctypes import wintypes
 from urllib.parse import quote_plus
 from datetime import datetime
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QLineEdit, QVBoxLayout, QHBoxLayout,
-                             QWidget, QToolBar, QStatusBar, QTextEdit, QDockWidget,
+                             QWidget, QStatusBar, QTextEdit, QDockWidget, QToolButton, QMenu,
                              QInputDialog, QListWidget, QListWidgetItem, QDialog,
-                             QPushButton, QMessageBox, QTabWidget, QStackedWidget, QLabel,
+                             QPushButton, QMessageBox, QTabBar, QStackedWidget, QLabel, QProgressBar,
                              QFormLayout, QComboBox, QCheckBox, QDialogButtonBox)
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-from PyQt6.QtCore import QUrl, Qt, QObject, QEvent, QTimer, QByteArray
+from PyQt6.QtCore import QUrl, Qt, QObject, QEvent, QTimer, QByteArray, QSize, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QIcon, QDesktopServices
 
 APP_NAME = "YD Browser"
-VERSION = "1.7"
+VERSION = "1.8"
 AUTHOR = "KIM YEONGDO"
 GITHUB_REPO = "Dubitnarae/secure_browser"
 
 MAX_HISTORY = 1000          # 방문 기록 최대 보관 개수 (넘으면 오래된 것부터 삭제)
 MAX_TABS = 20               # 동시에 열 수 있는 탭 수
+BOOKMARK_BAR_MAX = 10       # 북마크바에 보여줄 북마크 수 (나머지는 » 버튼)
 LOG_MAX_BYTES = 1_000_000   # 보안 로그가 이 크기를 넘으면 새 파일로 교체
 LOG_KEEP = 3                # 보관할 지난 로그 파일 개수
 CAPTURE_CHECK_MS = 5000     # 녹화·원격 프로그램 확인 주기
@@ -61,6 +62,7 @@ DEFAULT_SETTINGS = {
     "save_history": True,
     "capture_tool_action": "warn",
     "blur_on_inactive": False,
+    "show_bookmark_bar": True,
     "check_updates": True,
     "last_update_check": "",
 }
@@ -303,6 +305,168 @@ class SecurePage(QWebEnginePage):
         return self.open_tab()
 
 
+def repolish(widget):
+    """속성(property)이 바뀐 뒤 스타일시트를 다시 적용한다"""
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+
+
+# 크롬(라이트 테마)과 비슷한 색·모양: 회색 탭 줄, 흰색 주소 줄, 둥근 주소창, 파란 강조색
+CHROME_QSS = """
+QMainWindow, QDialog { background-color: #ffffff; }
+QWidget { font-family: "Segoe UI", "Malgun Gothic", sans-serif; color: #202124; }
+
+QWidget#tabstrip { background-color: #dee1e6; }
+QTabBar { background: transparent; }
+QTabBar::tab { background: transparent; color: #5f6368; height: 34px; min-width: 110px; max-width: 220px;
+    padding: 0 6px 0 12px; margin: 0 1px; border-top-left-radius: 9px; border-top-right-radius: 9px; }
+QTabBar::tab:selected { background-color: #ffffff; color: #202124; }
+QTabBar::tab:!selected:hover { background-color: #eceff3; }
+QToolButton#newtab { border: none; border-radius: 14px; background: transparent; color: #5f6368; font-size: 18px;
+    min-width: 28px; max-width: 28px; min-height: 28px; max-height: 28px; }
+QToolButton#newtab:hover { background-color: #cfd2d7; }
+QToolButton#tabclose { border: none; border-radius: 9px; background: transparent; color: #5f6368; font-size: 10px;
+    min-width: 18px; max-width: 18px; min-height: 18px; max-height: 18px; }
+QToolButton#tabclose:hover { background-color: #cfd2d7; }
+
+QWidget#toolbar { background-color: #ffffff; }
+QToolButton#nav { border: none; border-radius: 16px; background: transparent; color: #5f6368; font-size: 17px;
+    min-width: 32px; max-width: 32px; min-height: 32px; max-height: 32px; }
+QToolButton#nav:hover { background-color: #e8eaed; }
+QToolButton#nav:pressed { background-color: #dadce0; }
+QToolButton#nav:disabled { color: #c4c7cc; }
+QToolButton#nav::menu-indicator { image: none; }
+QToolButton#nav[big="true"] { font-size: 24px; font-weight: bold; }
+
+QWidget#omnibox { background-color: #f1f3f4; border: 2px solid transparent; border-radius: 19px; }
+QWidget#omnibox:hover { background-color: #e8eaed; }
+QWidget#omnibox[omniFocus="true"] { background-color: #ffffff; border: 2px solid #1a73e8; }
+QLineEdit#urlbar { background: transparent; border: none; padding: 5px 0; font-size: 14px; color: #202124;
+    selection-background-color: #d2e3fc; selection-color: #202124; }
+QToolButton#star { border: none; border-radius: 14px; background: transparent; color: #5f6368; font-size: 16px;
+    min-width: 28px; max-width: 28px; min-height: 28px; max-height: 28px; }
+QToolButton#star:hover { background-color: #dadce0; }
+QToolButton#star[marked="true"] { color: #1a73e8; }
+
+QWidget#bmbar { background-color: #ffffff; }
+QToolButton#bm { border: none; border-radius: 4px; padding: 4px 8px; color: #3c4043; font-size: 12px; background: transparent; }
+QToolButton#bm:hover { background-color: #f1f3f4; }
+QProgressBar#progress { background-color: #dadce0; border: none; }
+QProgressBar#progress::chunk { background-color: #1a73e8; }
+
+QWidget#findbar { background-color: #ffffff; border-top: 1px solid #dadce0; }
+QLineEdit { background-color: #ffffff; border: 1px solid #dadce0; border-radius: 6px; padding: 6px; }
+QLineEdit:focus { border: 2px solid #1a73e8; padding: 5px; }
+QPushButton { background-color: #ffffff; border: 1px solid #dadce0; border-radius: 16px; color: #1a73e8; padding: 6px 16px; }
+QPushButton:hover { background-color: #f6fafe; border-color: #d2e3fc; }
+QPushButton:pressed { background-color: #e8f0fe; }
+QListWidget { border: 1px solid #dadce0; border-radius: 6px; }
+QListWidget::item { padding: 6px; }
+QListWidget::item:selected { background-color: #e8f0fe; color: #202124; }
+
+QMenu { background-color: #ffffff; border: 1px solid #dadce0; padding: 6px 0; }
+QMenu::item { padding: 7px 28px 7px 24px; color: #202124; }
+QMenu::item:selected { background-color: #f1f3f4; }
+QMenu::separator { height: 1px; background-color: #e8eaed; margin: 6px 0; }
+QToolTip { background-color: #3c4043; color: #ffffff; border: none; padding: 4px 8px; }
+QStatusBar { background-color: #f1f3f4; color: #3c4043; border-top: 1px solid #dadce0; }
+"""
+
+
+class TabHost(QObject):
+    """크롬처럼 주소 줄 '위'에 놓이는 탭 줄. 탭마다 웹 화면(view)을 하나씩 가진다.
+    (QTabWidget은 탭 줄과 화면 사이에 주소 줄을 끼울 수 없어서 직접 만들었다)"""
+    currentChanged = pyqtSignal(int)
+    tabCloseRequested = pyqtSignal(int)
+    newTabRequested = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.views = []
+        self.stack = QStackedWidget()
+        self.bar = QTabBar()
+        self.bar.setMovable(True)
+        self.bar.setExpanding(False)
+        self.bar.setDrawBase(False)
+        self.bar.setDocumentMode(True)
+        self.bar.setUsesScrollButtons(True)
+        self.bar.setElideMode(Qt.TextElideMode.ElideRight)
+        self.bar.setIconSize(QSize(16, 16))
+        self.bar.currentChanged.connect(self._on_current)
+        self.bar.tabMoved.connect(self._on_moved)
+
+        new_btn = QToolButton()
+        new_btn.setObjectName("newtab")
+        new_btn.setText("+")
+        new_btn.setToolTip("새 탭 (Ctrl+T)")
+        new_btn.clicked.connect(lambda _=False: self.newTabRequested.emit())
+
+        self.strip = QWidget()
+        self.strip.setObjectName("tabstrip")
+        self.strip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        row = QHBoxLayout(self.strip)
+        row.setContentsMargins(8, 6, 8, 0)
+        row.setSpacing(2)
+        row.addWidget(self.bar)
+        row.addWidget(new_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        row.addStretch(1)
+
+    def _on_current(self, index):
+        if 0 <= index < len(self.views):
+            self.stack.setCurrentWidget(self.views[index])
+            self.currentChanged.emit(index)
+
+    def _on_moved(self, src, dst):
+        self.views.insert(dst, self.views.pop(src))
+
+    def count(self):
+        return len(self.views)
+
+    def widget(self, index):
+        return self.views[index] if 0 <= index < len(self.views) else None
+
+    def indexOf(self, view):
+        return self.views.index(view) if view in self.views else -1
+
+    def currentIndex(self):
+        return self.bar.currentIndex()
+
+    def currentWidget(self):
+        return self.widget(self.bar.currentIndex())
+
+    def setCurrentIndex(self, index):
+        self.bar.setCurrentIndex(index)
+
+    def addTab(self, view, text):
+        self.views.append(view)
+        self.stack.addWidget(view)
+        index = self.bar.addTab(text)
+        close_btn = QToolButton()
+        close_btn.setObjectName("tabclose")
+        close_btn.setText("✕")
+        close_btn.setToolTip("탭 닫기 (Ctrl+W)")
+        close_btn.clicked.connect(lambda _=False, v=view: self.tabCloseRequested.emit(self.indexOf(v)))
+        self.bar.setTabButton(index, QTabBar.ButtonPosition.RightSide, close_btn)
+        return index
+
+    def removeTab(self, index):
+        view = self.views.pop(index)
+        self.stack.removeWidget(view)
+        self.bar.removeTab(index)
+
+    def setTabText(self, index, text):
+        if index >= 0:
+            self.bar.setTabText(index, text)
+
+    def setTabToolTip(self, index, text):
+        if index >= 0:
+            self.bar.setTabToolTip(index, text)
+
+    def setTabIcon(self, index, icon):
+        if index >= 0:
+            self.bar.setTabIcon(index, icon)
+
+
 class SettingsDialog(QDialog):
     def __init__(self, window):
         super().__init__(window)
@@ -402,24 +566,31 @@ class LoggingSecureBrowser(QMainWindow):
         self.inactive_cover = False    # 다른 창으로 전환해서 가리는 중인지
         self.load_data()
 
-        # --- 화면: 탭 + 찾기 줄 / (녹화 프로그램 감지 시) 가림막
-        self.stack = QStackedWidget()
+        # --- 화면: 크롬처럼 [탭 줄] [주소 줄] [북마크바] [진행 표시] [웹 화면] [찾기 줄]
+        self.stack = QStackedWidget()          # 0: 브라우저 화면, 1: 가림막
         self.setCentralWidget(self.stack)
         main_page = QWidget()
         main_layout = QVBoxLayout(main_page)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
-        self.tabs.setTabsClosable(True)
-        self.tabs.setMovable(True)
+        self.tabs = TabHost(self)
         self.tabs.tabCloseRequested.connect(self.close_tab)
-        main_layout.addWidget(self.tabs)
+        self.tabs.newTabRequested.connect(lambda: self.new_tab())
+        main_layout.addWidget(self.tabs.strip)
+        main_layout.addWidget(self.build_toolbar())
+        main_layout.addWidget(self.build_bookmark_bar())
+        self.progress = QProgressBar()
+        self.progress.setObjectName("progress")
+        self.progress.setTextVisible(False)
+        self.progress.setRange(0, 100)
+        self.progress.setFixedHeight(2)
+        main_layout.addWidget(self.progress)
+        main_layout.addWidget(self.tabs.stack, 1)
         self.setup_find_bar(main_layout)
         self.cover = QLabel()
         self.cover.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.cover.setWordWrap(True)
-        self.cover.setStyleSheet("background-color: #2f3640; color: white; font-size: 18px; padding: 40px;")
+        self.cover.setStyleSheet("background-color: #202124; color: white; font-size: 18px; padding: 40px;")
         self.stack.addWidget(main_page)
         self.stack.addWidget(self.cover)
 
@@ -431,13 +602,15 @@ class LoggingSecureBrowser(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock)
         self.dock.hide()
 
+        # 상태 표시줄은 크롬처럼 평소에는 숨기고, 알림이 있을 때만 보인다
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage(self.idle_message())
+        self.status_bar.hide()
+        self.status_bar.messageChanged.connect(lambda text: self.status_bar.setVisible(bool(text)))
 
-        self.setup_toolbar()
         self.setup_shortcuts()
-        self.apply_light_theme()
+        self.apply_chrome_theme()
+        self.refresh_bookmark_bar()
 
         # --- 보안 정책 (다운로드 차단은 프로필, 권한 거부는 페이지마다)
         self.profile = QWebEngineProfile.defaultProfile()
@@ -504,49 +677,154 @@ class LoggingSecureBrowser(QMainWindow):
             self.add_log(f"⚠️ 설정 저장 실패: {e}")
 
     # ---------- 화면 구성 ----------
-    def idle_message(self):
-        return "보안 시스템 가동 중 | 스마트 검색 활성화"
+    def build_toolbar(self):
+        """뒤로·앞으로·새로고침 / 둥근 주소창(연결 상태, 주소, 북마크 별) / 메뉴(⋮)"""
+        bar = QWidget()
+        bar.setObjectName("toolbar")
+        bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(8, 5, 8, 5)
+        row.setSpacing(4)
 
-    def setup_toolbar(self):
-        navbar = QToolBar()
-        navbar.setMovable(False)
-        self.addToolBar(navbar)
+        def tool_button(text, tip, slot, name="nav"):
+            button = QToolButton()
+            button.setObjectName(name)
+            button.setText(text)
+            button.setToolTip(tip)
+            button.clicked.connect(lambda _=False: slot())
+            return button
 
-        def add_action(text, tip, slot):
-            action = QAction(text, self)
-            if tip:
-                action.setToolTip(tip)
-            action.triggered.connect(slot)
-            navbar.addAction(action)
-            return action
+        self.back_btn = tool_button("←", "뒤로 (Alt+←)", self.go_back)
+        self.forward_btn = tool_button("→", "앞으로 (Alt+→)", self.go_forward)
+        self.reload_btn = tool_button("⟳", "새로고침 (F5)", self.reload_or_stop)
+        for button in (self.back_btn, self.forward_btn, self.reload_btn):
+            row.addWidget(button)
 
-        add_action('◀', "뒤로 (Alt+←)", self.go_back)
-        add_action('▶', "앞으로 (Alt+→)", self.go_forward)
-        add_action('🔄', "새로고침 (F5)", self.reload_page)
-        add_action('➕', "새 탭 (Ctrl+T)", lambda: self.new_tab())
-        add_action('⭐ 북마크', "", self.add_bookmark)
-        add_action('📂 목록', "", self.show_bookmarks)
-        add_action('🕘 기록', "", self.show_history)
-
-        # 연결 상태(🔒/⚠️) + 주소창 (여기에 검색 로직이 통합됨)
+        # 주소창 (여기에 검색 로직이 통합됨)
+        self.omnibox = QWidget()
+        self.omnibox.setObjectName("omnibox")
+        self.omnibox.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.omnibox.setMinimumHeight(38)
+        inner = QHBoxLayout(self.omnibox)
+        inner.setContentsMargins(12, 0, 6, 0)
+        inner.setSpacing(6)
         self.sec_label = QLabel()
-        navbar.addWidget(self.sec_label)
+        inner.addWidget(self.sec_label)
         self.url_bar = QLineEdit()
+        self.url_bar.setObjectName("urlbar")
         self.url_bar.setPlaceholderText("주소 입력 또는 검색 (Ctrl+L)")
         self.url_bar.returnPressed.connect(self.navigate_to_url)
-        navbar.addWidget(self.url_bar)
+        self.url_bar.installEventFilter(self)
+        inner.addWidget(self.url_bar, 1)
+        self.star_btn = tool_button("☆", "이 페이지를 북마크 (Ctrl+D)", self.toggle_bookmark, "star")
+        inner.addWidget(self.star_btn)
+        row.addWidget(self.omnibox, 1)
 
-        self.log_toggle_btn = QAction('📋 로그', self)
-        self.log_toggle_btn.setCheckable(True)
-        self.log_toggle_btn.triggered.connect(self.toggle_log_window)
-        navbar.addAction(self.log_toggle_btn)
+        menu_btn = QToolButton()
+        menu_btn.setObjectName("nav")
+        menu_btn.setText("⋮")
+        menu_btn.setProperty("big", True)
+        menu_btn.setToolTip("메뉴")
+        menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu_btn.setMenu(self.build_menu())
+        row.addWidget(menu_btn)
+        return bar
 
-        add_action('⚙ 설정', "", self.open_settings)
+    def build_menu(self):
+        menu = QMenu(self)
+
+        def add(text, slot, checkable=False):
+            action = menu.addAction(text)
+            action.setCheckable(checkable)
+            action.triggered.connect(lambda _checked=False: slot())
+            return action
+
+        add("새 탭\tCtrl+T", lambda: self.new_tab())
+        menu.addSeparator()
+        add("북마크 목록", self.show_bookmarks)
+        self.bm_bar_action = add("북마크바 표시\tCtrl+Shift+B", self.toggle_bookmark_bar, True)
+        self.bm_bar_action.setChecked(self.settings["show_bookmark_bar"])
+        add("방문 기록\tCtrl+H", self.show_history)
+        menu.addSeparator()
+        add("페이지에서 찾기\tCtrl+F", self.show_find_bar)
+        add("확대\tCtrl++", lambda: self.zoom(0.1))
+        add("축소\tCtrl+-", lambda: self.zoom(-0.1))
+        add("원래 크기\tCtrl+0", lambda: self.zoom(None))
+        menu.addSeparator()
+        self.log_toggle_btn = add("보안 로그", self.toggle_log_window, True)
+        add("설정", self.open_settings)
+        return menu
+
+    def build_bookmark_bar(self):
+        self.bm_bar = QWidget()
+        self.bm_bar.setObjectName("bmbar")
+        self.bm_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.bm_row = QHBoxLayout(self.bm_bar)
+        self.bm_row.setContentsMargins(8, 2, 8, 3)
+        self.bm_row.setSpacing(2)
+        return self.bm_bar
+
+    def refresh_bookmark_bar(self):
+        """북마크바를 현재 북마크로 다시 만든다 (없거나 끄면 숨김)"""
+        while self.bm_row.count():
+            item = self.bm_row.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.hide()           # deleteLater만 하면 새 버튼 뒤에 잠깐 남아 글자가 겹쳐 보인다
+                widget.setParent(None)
+                widget.deleteLater()
+        if not self.settings["show_bookmark_bar"] or not self.bookmarks:
+            self.bm_bar.hide()
+            return
+        for bookmark in self.bookmarks[:BOOKMARK_BAR_MAX]:
+            title = bookmark["title"]
+            button = QToolButton()
+            button.setObjectName("bm")
+            button.setText(title if len(title) <= 18 else title[:17] + "…")
+            button.setToolTip(f"{title}\n{bookmark['url']}")
+            button.clicked.connect(lambda _=False, b=bookmark: self.open_bookmark(b))
+            button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            button.customContextMenuRequested.connect(
+                lambda pos, btn=button, b=bookmark: self.bookmark_context_menu(btn, b, pos))
+            self.bm_row.addWidget(button)
+        if len(self.bookmarks) > BOOKMARK_BAR_MAX:
+            more = QToolButton()
+            more.setObjectName("bm")
+            more.setText("»")
+            more.setToolTip("북마크 전체 보기")
+            more.clicked.connect(lambda _=False: self.show_bookmarks())
+            self.bm_row.addWidget(more)
+        self.bm_row.addStretch(1)
+        self.bm_bar.show()
+
+    def open_bookmark(self, bookmark, new_tab=False):
+        if new_tab:
+            self.new_tab(bookmark["url"])
+        else:
+            view = self.current_view()
+            if view:
+                view.setUrl(QUrl(bookmark["url"]))
+
+    def bookmark_context_menu(self, button, bookmark, pos):
+        menu = QMenu(self)
+        open_action = menu.addAction("열기")
+        new_tab_action = menu.addAction("새 탭에서 열기")
+        menu.addSeparator()
+        delete_action = menu.addAction("삭제")
+        chosen = menu.exec(button.mapToGlobal(pos))
+        if chosen is open_action:
+            self.open_bookmark(bookmark)
+        elif chosen is new_tab_action:
+            self.open_bookmark(bookmark, new_tab=True)
+        elif chosen is delete_action:
+            self.remove_bookmark_url(bookmark["url"])
 
     def setup_find_bar(self, parent_layout):
         self.find_bar = QWidget()
+        self.find_bar.setObjectName("findbar")
+        self.find_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         row = QHBoxLayout(self.find_bar)
-        row.setContentsMargins(6, 3, 6, 3)
+        row.setContentsMargins(10, 6, 10, 6)
         self.find_input = QLineEdit()
         self.find_input.setPlaceholderText("페이지에서 찾기")
         self.find_input.textChanged.connect(lambda text: self.find_text(text))
@@ -554,11 +832,11 @@ class LoggingSecureBrowser(QMainWindow):
         row.addWidget(self.find_input)
         for label, backward in (("▲", True), ("▼", False)):
             btn = QPushButton(label)
-            btn.setFixedWidth(34)
+            btn.setFixedWidth(40)
             btn.clicked.connect(lambda _=False, b=backward: self.find_text(self.find_input.text(), b))
             row.addWidget(btn)
         close_btn = QPushButton("✕")
-        close_btn.setFixedWidth(34)
+        close_btn.setFixedWidth(40)
         close_btn.clicked.connect(self.hide_find_bar)
         row.addWidget(close_btn)
         esc = QShortcut(QKeySequence("Esc"), self.find_bar, activated=self.hide_find_bar)
@@ -580,18 +858,30 @@ class LoggingSecureBrowser(QMainWindow):
         bind("Ctrl+Tab", lambda: self.switch_tab(1))
         bind("Ctrl+Shift+Tab", lambda: self.switch_tab(-1))
         bind("Ctrl+F", self.show_find_bar)
+        bind("Ctrl+D", self.toggle_bookmark)
+        bind("Ctrl+H", self.show_history)
+        bind("Ctrl+Shift+B", self.toggle_bookmark_bar)
         bind("Ctrl+=", lambda: self.zoom(0.1))
         bind("Ctrl++", lambda: self.zoom(0.1))
         bind("Ctrl+-", lambda: self.zoom(-0.1))
         bind("Ctrl+0", lambda: self.zoom(None))
 
-    def apply_light_theme(self):
-        self.setStyleSheet("""
-            QMainWindow { background-color: #f5f6fa; }
-            QToolBar { background-color: #ffffff; border-bottom: 1px solid #dcdde1; padding: 5px; spacing: 8px; }
-            QLineEdit { background-color: #f1f2f6; color: #2f3640; border: 1px solid #dcdde1; padding: 6px; border-radius: 5px; font-size: 14px; }
-            QStatusBar { background-color: #ffffff; color: #2f3640; border-top: 1px solid #dcdde1; }
-        """)
+    def apply_chrome_theme(self):
+        self.setStyleSheet(CHROME_QSS)
+
+    def eventFilter(self, obj, event):
+        # 주소창에 포커스가 가면 크롬처럼 파란 테두리를 보이고 전체 선택한다
+        if obj is self.url_bar:
+            if event.type() == QEvent.Type.FocusIn:
+                self.set_omnibox_focus(True)
+                QTimer.singleShot(0, self.url_bar.selectAll)
+            elif event.type() == QEvent.Type.FocusOut:
+                self.set_omnibox_focus(False)
+        return super().eventFilter(obj, event)
+
+    def set_omnibox_focus(self, on):
+        self.omnibox.setProperty("omniFocus", on)
+        repolish(self.omnibox)
 
     # ---------- 탭 ----------
     def current_view(self):
@@ -608,6 +898,7 @@ class LoggingSecureBrowser(QMainWindow):
         view.urlChanged.connect(lambda q, v=view: self.on_url_changed(v, q))
         view.titleChanged.connect(lambda t, v=view: self.on_title_changed(v, t))
         view.loadProgress.connect(lambda p, v=view: self.on_load_progress(v, p))
+        view.iconChanged.connect(lambda icon, v=view: self.tabs.setTabIcon(self.tabs.indexOf(v), icon))
         index = self.tabs.addTab(view, "새 탭")
         if switch:
             self.tabs.setCurrentIndex(index)
@@ -650,6 +941,9 @@ class LoggingSecureBrowser(QMainWindow):
             return
         self.show_url(view.url().toString())
         self.on_title_changed(view, view.title())
+        self.progress.setValue(0)
+        self.update_reload_button()
+        self.update_nav_buttons()
         if self.find_bar.isVisible():
             self.find_text(self.find_input.text())
 
@@ -658,6 +952,7 @@ class LoggingSecureBrowser(QMainWindow):
         url = q.toString()
         if view is self.current_view():
             self.show_url(url)
+            self.update_nav_buttons()
         if not url or url == "about:blank" or not self.settings["save_history"]:
             return
         if not self.history or self.history[-1]['url'] != url:
@@ -669,23 +964,43 @@ class LoggingSecureBrowser(QMainWindow):
         icon, tip = security_icon(url)
         self.sec_label.setText(icon)
         self.sec_label.setToolTip(tip)
+        self.update_star(url)
+
+    def update_star(self, url):
+        marked = any(b['url'] == url for b in self.bookmarks)
+        self.star_btn.setText("★" if marked else "☆")
+        self.star_btn.setToolTip("북마크 삭제 (Ctrl+D)" if marked else "이 페이지를 북마크 (Ctrl+D)")
+        self.star_btn.setProperty("marked", marked)
+        repolish(self.star_btn)
+
+    def update_nav_buttons(self):
+        view = self.current_view()
+        history = view.history() if view else None
+        self.back_btn.setEnabled(bool(history and history.canGoBack()))
+        self.forward_btn.setEnabled(bool(history and history.canGoForward()))
+
+    def update_reload_button(self):
+        view = self.current_view()
+        loading = bool(view is not None and getattr(view, "_loading", False))
+        self.reload_btn.setText("✕" if loading else "⟳")
+        self.reload_btn.setToolTip("로드 중지" if loading else "새로고침 (F5)")
 
     def on_title_changed(self, view, title):
         index = self.tabs.indexOf(view)
         if index >= 0:
-            short = title if len(title) <= 20 else title[:19] + "…"
-            self.tabs.setTabText(index, short or "새 탭")
+            self.tabs.setTabText(index, title or "새 탭")   # 길면 탭 줄이 알아서 줄여서 보여준다
             self.tabs.setTabToolTip(index, title)
         if view is self.current_view():
             self.setWindowTitle(f"{title} - {APP_NAME}" if title else f"{APP_NAME} - 보안 모드")
 
     def on_load_progress(self, view, percent):
-        if view is not self.current_view() or self.detected_blocked():
+        view._loading = percent < 100
+        if view is not self.current_view():
             return
-        if percent < 100:
-            self.status_bar.showMessage(f"불러오는 중... {percent}%")
-        else:
-            self.status_bar.showMessage(self.idle_message())
+        self.progress.setValue(percent if percent < 100 else 0)
+        self.update_reload_button()
+        if percent >= 100:
+            self.update_nav_buttons()
 
     def on_download_requested(self, download):
         name = download.downloadFileName()
@@ -716,6 +1031,16 @@ class LoggingSecureBrowser(QMainWindow):
     def reload_page(self):
         view = self.current_view()
         if view:
+            view.reload()
+
+    def reload_or_stop(self):
+        """불러오는 중이면 중지, 아니면 새로고침 (크롬의 ⟳ / ✕ 버튼)"""
+        view = self.current_view()
+        if view is None:
+            return
+        if getattr(view, "_loading", False):
+            view.stop()
+        else:
             view.reload()
 
     def focus_url_bar(self):
@@ -772,7 +1097,37 @@ class LoggingSecureBrowser(QMainWindow):
         if ok and title:
             self.bookmarks.append({"title": title, "url": url})
             self.save_data()
+            self.bookmarks_changed()
             self.status_bar.showMessage("북마크에 추가했습니다.", 3000)
+
+    def toggle_bookmark(self):
+        """주소창의 별(☆/★), Ctrl+D: 없으면 추가, 이미 있으면 삭제"""
+        view = self.current_view()
+        if view is None:
+            return
+        url = view.url().toString()
+        if any(b['url'] == url for b in self.bookmarks):
+            self.remove_bookmark_url(url)
+        else:
+            self.add_bookmark()
+
+    def remove_bookmark_url(self, url):
+        self.bookmarks = [b for b in self.bookmarks if b['url'] != url]
+        self.save_data()
+        self.bookmarks_changed()
+        self.status_bar.showMessage("북마크를 삭제했습니다.", 3000)
+
+    def bookmarks_changed(self):
+        self.refresh_bookmark_bar()
+        view = self.current_view()
+        if view:
+            self.update_star(view.url().toString())
+
+    def toggle_bookmark_bar(self):
+        self.settings["show_bookmark_bar"] = not self.settings["show_bookmark_bar"]
+        self.bm_bar_action.setChecked(self.settings["show_bookmark_bar"])
+        self.save_app_settings()
+        self.refresh_bookmark_bar()
 
     def show_bookmarks(self):
         self.show_list_dialog("북마크 목록", self.bookmarks)
@@ -832,6 +1187,7 @@ class LoggingSecureBrowser(QMainWindow):
             return
         del self.bookmarks[row.data(Qt.ItemDataRole.UserRole + 1)]
         self.save_data()
+        self.bookmarks_changed()
         self.fill_list(list_widget, self.bookmarks, False)  # 번호가 밀리므로 다시 채움
 
     def clear_history(self, list_widget):
@@ -872,7 +1228,7 @@ class LoggingSecureBrowser(QMainWindow):
             pass
 
     def flash_alert(self, message, ms=7000):
-        self.status_bar.setStyleSheet("background-color: #e74c3c; color: white;")
+        self.status_bar.setStyleSheet("QStatusBar { background-color: #d93025; color: white; border: none; }")
         self.status_bar.showMessage(message, ms)
         QTimer.singleShot(ms, lambda: self.status_bar.setStyleSheet(""))
 
@@ -883,9 +1239,6 @@ class LoggingSecureBrowser(QMainWindow):
         self.flash_alert("🚨 보안 경고: 캡처 동작 감지!")
         # 클립보드에 복사된 내용 제거 (캡처 직후 들어오므로 잠시 뒤에 비움)
         QTimer.singleShot(300, QApplication.clipboard().clear)
-
-    def detected_blocked(self):
-        return self.stack.currentIndex() == 1
 
     def check_capture_tools(self):
         action = self.settings["capture_tool_action"]
