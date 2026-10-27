@@ -1,0 +1,10 @@
+__pycache__/
+build/
+dist/
+*.spec
+
+# 개인 데이터 (방문 기록·북마크·보안 로그)
+browser_data.json
+browser_data.json.tmp
+browser_data.json.broken_*
+security.log
