@@ -23,7 +23,8 @@ VSVersionInfo(
   ffi=FixedFileInfo(filevers=($tuple), prodvers=($tuple), mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),
   kids=[
     StringFileInfo([StringTable('041204b0', [
-      StringStruct('CompanyName', 'Dubitnarae'),
+      StringStruct('CompanyName', 'KIM YEONGDO'),
+      StringStruct('LegalCopyright', 'Copyright (c) 2026 KIM YEONGDO'),
       StringStruct('FileDescription', 'YD Browser'),
       StringStruct('FileVersion', '$ver'),
       StringStruct('InternalName', 'YD_Browser'),
