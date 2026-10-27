@@ -1,13 +1,14 @@
 # YD Browser (secure_browser)
 
-PyQt6 + QtWebEngine으로 만든 Windows용 보안 브라우저. 현재 버전 v1.6. GitHub: Dubitnarae/secure_browser
+PyQt6 + QtWebEngine으로 만든 Windows용 보안 브라우저. 현재 버전 v1.7. 개발자 표기: KIM YEONGDO (코드 `AUTHOR`, build.ps1 파일 속성, README, 설정 창). GitHub: Dubitnarae/secure_browser
 
 ## 파일
-- `secure_browser v1.6.py` — 프로그램 전체 (파일명에 버전을 붙이고, 코드 안 `VERSION`도 같이 올린다. `build.ps1`이 둘이 다르면 중단함)
+- `secure_browser v1.7.py` — 프로그램 전체 (파일명에 버전을 붙이고, 코드 안 `VERSION`도 같이 올린다. `build.ps1`이 둘이 다르면 중단함)
 - `build.ps1` — exe 빌드 + `dist\YD_Browser_v<버전>.zip` + `.sha256` 생성 (`.\build.ps1`로 실행, ASCII만 사용)
 - `icon.ico` — 아이콘 (빌드에 포함)
+- `test_core.py` — 화면 없이 도는 핵심 기능 시험 (`python test_core.py`, 버전업 때 먼저 실행)
 - `README.md`, `CHANGELOG.md` — 버전업 때마다 갱신. 릴리스 설명은 CHANGELOG의 해당 버전 부분을 쓴다
-- 실행 중 생기는 개인 데이터(git 제외): `browser_data.json`(암호화), `settings.json`, `security.log*`
+- 실행 중 생기는 개인 데이터(git 제외): `browser_data.json`(암호화), `settings.json`, `security.log*`, `error.log`
 
 ## 핵심 동작
 - `resolve_input()` — 주소창 입력이 주소인지 검색어인지 판별 (검색어는 URL 인코딩, 검색 엔진은 설정)

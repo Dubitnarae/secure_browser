@@ -13,3 +13,4 @@ settings.json
 settings.json.tmp
 security.log
 security.log.*
+error.log

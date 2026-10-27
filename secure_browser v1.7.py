@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+import traceback
 from ctypes import wintypes
 from urllib.parse import quote_plus
 from datetime import datetime
@@ -19,7 +20,8 @@ from PyQt6.QtCore import QUrl, Qt, QObject, QEvent, QTimer, QByteArray
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QIcon, QDesktopServices
 
 APP_NAME = "YD Browser"
-VERSION = "1.6"
+VERSION = "1.7"
+AUTHOR = "KIM YEONGDO"
 GITHUB_REPO = "Dubitnarae/secure_browser"
 
 MAX_HISTORY = 1000          # 방문 기록 최대 보관 개수 (넘으면 오래된 것부터 삭제)
@@ -58,6 +60,7 @@ DEFAULT_SETTINGS = {
     "allow_downloads": False,
     "save_history": True,
     "capture_tool_action": "warn",
+    "blur_on_inactive": False,
     "check_updates": True,
     "last_update_check": "",
 }
@@ -111,6 +114,30 @@ def resolve_input(text, engine="google"):
 def parse_version(text):
     """'v1.6' → (1, 6)"""
     return tuple(int(n) for n in re.findall(r'\d+', text))
+
+
+def security_icon(url):
+    """주소 앞에 보여줄 연결 상태 표시: (아이콘, 설명)"""
+    lower = url.lower()
+    if lower.startswith("https://"):
+        return "🔒", "암호화된 연결(https)입니다."
+    if lower.startswith("http://"):
+        return "⚠️", "암호화되지 않은 연결(http)입니다. 비밀번호나 개인정보를 입력하지 마세요."
+    return "", ""
+
+
+def install_excepthook(log_path):
+    """처리되지 않은 오류를 error.log에 남기고, 프로그램이 갑자기 꺼지지 않게 한다."""
+    def hook(exc_type, exc, tb):
+        text = "".join(traceback.format_exception(exc_type, exc, tb))
+        try:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] v{VERSION}\n{text}\n")
+        except OSError:
+            pass
+        if sys.stderr:
+            sys.__excepthook__(exc_type, exc, tb)
+    sys.excepthook = hook
 
 
 # ---------------------------------------------------------------- 저장 데이터 암호화 (Windows DPAPI)
@@ -314,15 +341,24 @@ class SettingsDialog(QDialog):
         self.capture.setCurrentIndex(self.capture.findData(s["capture_tool_action"]))
         form.addRow("녹화·원격 프로그램 감지 시", self.capture)
 
+        self.blur_on_inactive = QCheckBox("다른 창으로 전환하면 화면 가리기")
+        self.blur_on_inactive.setChecked(s["blur_on_inactive"])
+        form.addRow("화면 보호", self.blur_on_inactive)
+
         self.check_updates = QCheckBox("하루 한 번 새 버전 확인 (GitHub에 접속)")
         self.check_updates.setChecked(s["check_updates"])
         form.addRow("업데이트", self.check_updates)
 
         update_btn = QPushButton("지금 새 버전 확인")
         update_btn.clicked.connect(lambda: window.check_for_updates(manual=True))
+        folder_btn = QPushButton("저장 폴더 열기 (설정·로그 위치)")
+        folder_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(BASE_DIR)))
         form.addRow("", update_btn)
+        form.addRow("", folder_btn)
 
-        form.addRow(QLabel(f"{APP_NAME} v{VERSION}"))
+        info = QLabel(f"{APP_NAME} v{VERSION}\n개발자: {AUTHOR}")
+        info.setStyleSheet("color: #636e72;")
+        form.addRow(info)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("저장")
@@ -340,6 +376,7 @@ class SettingsDialog(QDialog):
             "save_history": self.save_history.isChecked(),
             "allow_downloads": self.allow_downloads.isChecked(),
             "capture_tool_action": self.capture.currentData(),
+            "blur_on_inactive": self.blur_on_inactive.isChecked(),
             "check_updates": self.check_updates.isChecked(),
         }
 
@@ -361,6 +398,8 @@ class LoggingSecureBrowser(QMainWindow):
         self.startup_notice = None
         self.plain_warned = False
         self.detected = set()
+        self.capture_cover_text = ""   # 녹화 프로그램 때문에 가릴 때의 안내 글
+        self.inactive_cover = False    # 다른 창으로 전환해서 가리는 중인지
         self.load_data()
 
         # --- 화면: 탭 + 찾기 줄 / (녹화 프로그램 감지 시) 가림막
@@ -405,6 +444,7 @@ class LoggingSecureBrowser(QMainWindow):
         self.profile.downloadRequested.connect(self.on_download_requested)
 
         self.tabs.currentChanged.connect(self.on_tab_changed)
+        QApplication.instance().applicationStateChanged.connect(self.on_app_state)
         self.restore_geometry()
         self.open_start_tabs()
 
@@ -488,7 +528,9 @@ class LoggingSecureBrowser(QMainWindow):
         add_action('📂 목록', "", self.show_bookmarks)
         add_action('🕘 기록', "", self.show_history)
 
-        # 주소창 (여기에 검색 로직이 통합됨)
+        # 연결 상태(🔒/⚠️) + 주소창 (여기에 검색 로직이 통합됨)
+        self.sec_label = QLabel()
+        navbar.addWidget(self.sec_label)
         self.url_bar = QLineEdit()
         self.url_bar.setPlaceholderText("주소 입력 또는 검색 (Ctrl+L)")
         self.url_bar.returnPressed.connect(self.navigate_to_url)
@@ -606,7 +648,7 @@ class LoggingSecureBrowser(QMainWindow):
         view = self.current_view()
         if view is None:
             return
-        self.url_bar.setText(view.url().toString())
+        self.show_url(view.url().toString())
         self.on_title_changed(view, view.title())
         if self.find_bar.isVisible():
             self.find_text(self.find_input.text())
@@ -615,12 +657,18 @@ class LoggingSecureBrowser(QMainWindow):
     def on_url_changed(self, view, q):
         url = q.toString()
         if view is self.current_view():
-            self.url_bar.setText(url)
+            self.show_url(url)
         if not url or url == "about:blank" or not self.settings["save_history"]:
             return
         if not self.history or self.history[-1]['url'] != url:
             self.history.append({"url": url, "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
             self.save_data()
+
+    def show_url(self, url):
+        self.url_bar.setText(url)
+        icon, tip = security_icon(url)
+        self.sec_label.setText(icon)
+        self.sec_label.setToolTip(tip)
 
     def on_title_changed(self, view, title):
         index = self.tabs.indexOf(view)
@@ -802,6 +850,7 @@ class LoggingSecureBrowser(QMainWindow):
             self.save_app_settings()
             self.add_log("설정 변경됨")
             self.check_capture_tools()
+            self.on_app_state(QApplication.applicationState())
 
     # ---------- 로그 / 보안 ----------
     def toggle_log_window(self):
@@ -853,11 +902,25 @@ class LoggingSecureBrowser(QMainWindow):
             self.add_log("녹화·원격 프로그램 종료 확인: " + ", ".join(sorted(gone)))
         self.detected = set(found)
         if action == "block" and found:
-            self.cover.setText("🔒 화면 녹화·원격 프로그램이 감지되어 화면을 가렸습니다.\n\n"
-                               + ", ".join(found) + "\n\n해당 프로그램을 종료하면 다시 표시됩니다.")
-            self.stack.setCurrentIndex(1)
+            self.capture_cover_text = ("🔒 화면 녹화·원격 프로그램이 감지되어 화면을 가렸습니다.\n\n"
+                                       + ", ".join(found) + "\n\n해당 프로그램을 종료하면 다시 표시됩니다.")
         else:
-            self.stack.setCurrentIndex(0)
+            self.capture_cover_text = ""
+        self.update_cover()
+
+    def on_app_state(self, state):
+        self.inactive_cover = (self.settings["blur_on_inactive"]
+                               and state != Qt.ApplicationState.ApplicationActive)
+        self.update_cover()
+
+    def update_cover(self):
+        """가림막: 녹화 프로그램 감지가 우선, 그다음 다른 창으로 전환했을 때"""
+        text = self.capture_cover_text
+        if not text and self.inactive_cover:
+            text = "🔒 다른 창으로 전환되어 화면을 가렸습니다.\n\n이 창을 클릭하면 다시 표시됩니다."
+        if text:
+            self.cover.setText(text)
+        self.stack.setCurrentIndex(1 if text else 0)
 
     # ---------- 업데이트 확인 ----------
     def check_for_updates(self, manual=False):
@@ -943,7 +1006,10 @@ class LoggingSecureBrowser(QMainWindow):
 
 
 if __name__ == "__main__":
+    install_excepthook(os.path.join(BASE_DIR, "error.log"))
     app = QApplication(sys.argv)
+    app.setApplicationName(APP_NAME)
+    app.setOrganizationName(AUTHOR)
     window = LoggingSecureBrowser()
     key_filter = CaptureKeyFilter(window.on_capture_key)
     app.installEventFilter(key_filter)
