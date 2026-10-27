@@ -12,21 +12,23 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QLineEdit, QVBoxLayout, 
                              QWidget, QStatusBar, QTextEdit, QDockWidget, QToolButton, QMenu,
                              QInputDialog, QListWidget, QListWidgetItem, QDialog,
                              QPushButton, QMessageBox, QTabBar, QStackedWidget, QLabel, QProgressBar,
-                             QFormLayout, QComboBox, QCheckBox, QDialogButtonBox)
+                             QFormLayout, QComboBox, QCheckBox, QDialogButtonBox, QCompleter)
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
-from PyQt6.QtCore import QUrl, Qt, QObject, QEvent, QTimer, QByteArray, QSize, pyqtSignal
+from PyQt6.QtCore import QUrl, Qt, QObject, QEvent, QTimer, QByteArray, QSize, QStringListModel, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QIcon, QDesktopServices
 
 APP_NAME = "YD Browser"
-VERSION = "1.8"
+VERSION = "1.9"
 AUTHOR = "KIM YEONGDO"
 GITHUB_REPO = "Dubitnarae/secure_browser"
 
 MAX_HISTORY = 1000          # 방문 기록 최대 보관 개수 (넘으면 오래된 것부터 삭제)
 MAX_TABS = 20               # 동시에 열 수 있는 탭 수
 BOOKMARK_BAR_MAX = 10       # 북마크바에 보여줄 북마크 수 (나머지는 » 버튼)
+CLOSED_TABS_MAX = 10        # '닫은 탭 다시 열기'로 기억할 탭 수
+SUGGEST_HISTORY_MAX = 300   # 주소창 추천에 쓸 최근 방문 기록 수
 LOG_MAX_BYTES = 1_000_000   # 보안 로그가 이 크기를 넘으면 새 파일로 교체
 LOG_KEEP = 3                # 보관할 지난 로그 파일 개수
 CAPTURE_CHECK_MS = 5000     # 녹화·원격 프로그램 확인 주기
@@ -360,9 +362,9 @@ QLineEdit:focus { border: 2px solid #1a73e8; padding: 5px; }
 QPushButton { background-color: #ffffff; border: 1px solid #dadce0; border-radius: 16px; color: #1a73e8; padding: 6px 16px; }
 QPushButton:hover { background-color: #f6fafe; border-color: #d2e3fc; }
 QPushButton:pressed { background-color: #e8f0fe; }
-QListWidget { border: 1px solid #dadce0; border-radius: 6px; }
-QListWidget::item { padding: 6px; }
-QListWidget::item:selected { background-color: #e8f0fe; color: #202124; }
+QListView { border: 1px solid #dadce0; border-radius: 6px; background-color: #ffffff; }
+QListView::item { padding: 6px; }
+QListView::item:selected { background-color: #e8f0fe; color: #202124; }
 
 QMenu { background-color: #ffffff; border: 1px solid #dadce0; padding: 6px 0; }
 QMenu::item { padding: 7px 28px 7px 24px; color: #202124; }
@@ -373,18 +375,35 @@ QStatusBar { background-color: #f1f3f4; color: #3c4043; border-top: 1px solid #d
 """
 
 
+class ChromeTabBar(QTabBar):
+    """마우스 가운데 버튼으로 탭 닫기 (크롬과 같음)"""
+    middleClicked = pyqtSignal(int)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.MiddleButton:
+            index = self.tabAt(event.position().toPoint())
+            if index >= 0:
+                self.middleClicked.emit(index)
+                return
+        super().mouseReleaseEvent(event)
+
+
 class TabHost(QObject):
     """크롬처럼 주소 줄 '위'에 놓이는 탭 줄. 탭마다 웹 화면(view)을 하나씩 가진다.
     (QTabWidget은 탭 줄과 화면 사이에 주소 줄을 끼울 수 없어서 직접 만들었다)"""
     currentChanged = pyqtSignal(int)
     tabCloseRequested = pyqtSignal(int)
     newTabRequested = pyqtSignal()
+    tabMenuRequested = pyqtSignal(int, object)   # (탭 번호, 화면 좌표)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.views = []
         self.stack = QStackedWidget()
-        self.bar = QTabBar()
+        self.bar = ChromeTabBar()
+        self.bar.middleClicked.connect(self.tabCloseRequested)
+        self.bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.bar.customContextMenuRequested.connect(self._on_context_menu)
         self.bar.setMovable(True)
         self.bar.setExpanding(False)
         self.bar.setDrawBase(False)
@@ -419,6 +438,18 @@ class TabHost(QObject):
     def _on_moved(self, src, dst):
         self.views.insert(dst, self.views.pop(src))
 
+    def _on_context_menu(self, pos):
+        index = self.bar.tabAt(pos)
+        if index >= 0:
+            self.tabMenuRequested.emit(index, self.bar.mapToGlobal(pos))
+
+    def moveCurrent(self, step):
+        """현재 탭을 좌우로 한 칸 이동 (Ctrl+Shift+PgUp/PgDn)"""
+        src = self.bar.currentIndex()
+        dst = src + step
+        if 0 <= dst < len(self.views):
+            self.bar.moveTab(src, dst)
+
     def count(self):
         return len(self.views)
 
@@ -438,9 +469,13 @@ class TabHost(QObject):
         self.bar.setCurrentIndex(index)
 
     def addTab(self, view, text):
-        self.views.append(view)
+        return self.insertTab(len(self.views), view, text)
+
+    def insertTab(self, index, view, text):
+        index = max(0, min(index, len(self.views)))
+        self.views.insert(index, view)
         self.stack.addWidget(view)
-        index = self.bar.addTab(text)
+        index = self.bar.insertTab(index, text)
         close_btn = QToolButton()
         close_btn.setObjectName("tabclose")
         close_btn.setText("✕")
@@ -564,6 +599,8 @@ class LoggingSecureBrowser(QMainWindow):
         self.detected = set()
         self.capture_cover_text = ""   # 녹화 프로그램 때문에 가릴 때의 안내 글
         self.inactive_cover = False    # 다른 창으로 전환해서 가리는 중인지
+        self.closed_tabs = []          # 닫은 탭 주소 (Ctrl+Shift+T로 다시 열기)
+        self.suggestions = {}          # 주소창 추천: 표시 글자 → 주소
         self.load_data()
 
         # --- 화면: 크롬처럼 [탭 줄] [주소 줄] [북마크바] [진행 표시] [웹 화면] [찾기 줄]
@@ -576,6 +613,7 @@ class LoggingSecureBrowser(QMainWindow):
         self.tabs = TabHost(self)
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.tabs.newTabRequested.connect(lambda: self.new_tab())
+        self.tabs.tabMenuRequested.connect(self.show_tab_menu)
         main_layout.addWidget(self.tabs.strip)
         main_layout.addWidget(self.build_toolbar())
         main_layout.addWidget(self.build_bookmark_bar())
@@ -715,6 +753,15 @@ class LoggingSecureBrowser(QMainWindow):
         self.url_bar.setPlaceholderText("주소 입력 또는 검색 (Ctrl+L)")
         self.url_bar.returnPressed.connect(self.navigate_to_url)
         self.url_bar.installEventFilter(self)
+        # 주소창 추천: 입력한 글자가 북마크·방문 기록의 제목/주소에 들어 있으면 목록으로 보여준다
+        self.suggest_model = QStringListModel(self)
+        self.completer = QCompleter(self.suggest_model, self)
+        self.completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self.completer.setMaxVisibleItems(8)
+        self.completer.activated[str].connect(self.on_suggestion_chosen)
+        self.url_bar.setCompleter(self.completer)
         inner.addWidget(self.url_bar, 1)
         self.star_btn = tool_button("☆", "이 페이지를 북마크 (Ctrl+D)", self.toggle_bookmark, "star")
         inner.addWidget(self.star_btn)
@@ -745,11 +792,14 @@ class LoggingSecureBrowser(QMainWindow):
         self.bm_bar_action = add("북마크바 표시\tCtrl+Shift+B", self.toggle_bookmark_bar, True)
         self.bm_bar_action.setChecked(self.settings["show_bookmark_bar"])
         add("방문 기록\tCtrl+H", self.show_history)
+        add("닫은 탭 다시 열기\tCtrl+Shift+T", self.reopen_closed_tab)
+        add("인터넷 사용 기록 삭제…\tCtrl+Shift+Del", self.clear_browsing_data)
         menu.addSeparator()
         add("페이지에서 찾기\tCtrl+F", self.show_find_bar)
         add("확대\tCtrl++", lambda: self.zoom(0.1))
         add("축소\tCtrl+-", lambda: self.zoom(-0.1))
         add("원래 크기\tCtrl+0", lambda: self.zoom(None))
+        add("전체 화면\tF11", self.toggle_fullscreen)
         menu.addSeparator()
         self.log_toggle_btn = add("보안 로그", self.toggle_log_window, True)
         add("설정", self.open_settings)
@@ -848,19 +898,40 @@ class LoggingSecureBrowser(QMainWindow):
         def bind(keys, slot):
             QShortcut(QKeySequence(keys), self, activated=slot)
 
-        bind("Ctrl+L", self.focus_url_bar)
-        bind("F6", self.focus_url_bar)
-        bind("F5", self.reload_page)
+        # 단축키는 Chromium의 단축키 표(accelerator_table.cc)를 참고했다.
+        # 저장(Ctrl+S)·인쇄(Ctrl+P)·소스 보기(Ctrl+U)는 보안 브라우저라서 일부러 넣지 않았다.
+        for keys in ("Ctrl+L", "F6", "Alt+D", "Ctrl+E", "Ctrl+K"):
+            bind(keys, self.focus_url_bar)
+        for keys in ("F5", "Ctrl+R"):
+            bind(keys, self.reload_page)
+        for keys in ("Ctrl+Shift+R", "Ctrl+F5", "Shift+F5"):
+            bind(keys, self.hard_reload)
         bind("Alt+Left", self.go_back)
         bind("Alt+Right", self.go_forward)
+        bind("Alt+Home", self.go_home)
         bind("Ctrl+T", lambda: self.new_tab())
-        bind("Ctrl+W", lambda: self.close_tab(self.tabs.currentIndex()))
-        bind("Ctrl+Tab", lambda: self.switch_tab(1))
-        bind("Ctrl+Shift+Tab", lambda: self.switch_tab(-1))
+        bind("Ctrl+Shift+T", self.reopen_closed_tab)
+        for keys in ("Ctrl+W", "Ctrl+F4"):
+            bind(keys, lambda: self.close_tab(self.tabs.currentIndex()))
+        for keys in ("Ctrl+Tab", "Ctrl+PgDown"):
+            bind(keys, lambda: self.switch_tab(1))
+        for keys in ("Ctrl+Shift+Tab", "Ctrl+PgUp"):
+            bind(keys, lambda: self.switch_tab(-1))
+        bind("Ctrl+Shift+PgDown", lambda: self.tabs.moveCurrent(1))
+        bind("Ctrl+Shift+PgUp", lambda: self.tabs.moveCurrent(-1))
+        for number in range(1, 9):
+            bind(f"Ctrl+{number}", lambda n=number: self.select_tab_number(n))
+        bind("Ctrl+9", lambda: self.select_tab_number(9))
         bind("Ctrl+F", self.show_find_bar)
+        for keys in ("F3", "Ctrl+G"):
+            bind(keys, lambda: self.find_again(False))
+        for keys in ("Shift+F3", "Ctrl+Shift+G"):
+            bind(keys, lambda: self.find_again(True))
         bind("Ctrl+D", self.toggle_bookmark)
         bind("Ctrl+H", self.show_history)
         bind("Ctrl+Shift+B", self.toggle_bookmark_bar)
+        bind("Ctrl+Shift+Delete", self.clear_browsing_data)
+        bind("F11", self.toggle_fullscreen)
         bind("Ctrl+=", lambda: self.zoom(0.1))
         bind("Ctrl++", lambda: self.zoom(0.1))
         bind("Ctrl+-", lambda: self.zoom(-0.1))
@@ -874,6 +945,7 @@ class LoggingSecureBrowser(QMainWindow):
         if obj is self.url_bar:
             if event.type() == QEvent.Type.FocusIn:
                 self.set_omnibox_focus(True)
+                self.refresh_suggestions()
                 QTimer.singleShot(0, self.url_bar.selectAll)
             elif event.type() == QEvent.Type.FocusOut:
                 self.set_omnibox_focus(False)
@@ -883,11 +955,34 @@ class LoggingSecureBrowser(QMainWindow):
         self.omnibox.setProperty("omniFocus", on)
         repolish(self.omnibox)
 
+    def refresh_suggestions(self):
+        """추천 목록 만들기: 북마크(제목 - 주소) 먼저, 그다음 최근 방문 기록(중복 제외)"""
+        entries = {}
+        seen = set()
+        for bookmark in reversed(self.bookmarks):
+            entries[f"{bookmark['title']} - {bookmark['url']}"] = bookmark['url']
+            seen.add(bookmark['url'])
+        for item in reversed(self.history[-SUGGEST_HISTORY_MAX:]):
+            if item['url'] not in seen:
+                seen.add(item['url'])
+                entries[item['url']] = item['url']
+        self.suggestions = entries
+        self.suggest_model.setStringList(list(entries))
+
+    def on_suggestion_chosen(self, text):
+        url = self.suggestions.get(text, text)
+        # Qt가 입력칸에 글자를 채운 뒤에 우리가 주소로 덮어쓰고 이동한다
+        QTimer.singleShot(0, lambda: self.go_to_text(url))
+
+    def go_to_text(self, text):
+        self.url_bar.setText(text)
+        self.navigate_to_url()
+
     # ---------- 탭 ----------
     def current_view(self):
         return self.tabs.currentWidget()
 
-    def new_tab(self, url=None, switch=True, load=True):
+    def new_tab(self, url=None, switch=True, load=True, index=None):
         if self.tabs.count() >= MAX_TABS:
             self.status_bar.showMessage(f"탭은 최대 {MAX_TABS}개까지 열 수 있습니다.", 3000)
             return None
@@ -899,16 +994,18 @@ class LoggingSecureBrowser(QMainWindow):
         view.titleChanged.connect(lambda t, v=view: self.on_title_changed(v, t))
         view.loadProgress.connect(lambda p, v=view: self.on_load_progress(v, p))
         view.iconChanged.connect(lambda icon, v=view: self.tabs.setTabIcon(self.tabs.indexOf(v), icon))
-        index = self.tabs.addTab(view, "새 탭")
+        position = self.tabs.count() if index is None else index
+        position = self.tabs.insertTab(position, view, "새 탭")
         if switch:
-            self.tabs.setCurrentIndex(index)
+            self.tabs.setCurrentIndex(position)
         if load:
             view.setUrl(QUrl(url or self.settings["home_url"]))
         return view
 
     def open_tab_for_page(self):
-        """페이지가 새 창을 요구할 때 (target=_blank 등) 새 탭의 페이지를 내준다"""
-        view = self.new_tab(load=False)
+        """페이지가 새 창을 요구할 때 (target=_blank 등) 새 탭의 페이지를 내준다.
+        크롬처럼 현재 탭 바로 오른쪽에 끼워 넣는다."""
+        view = self.new_tab(load=False, index=self.tabs.currentIndex() + 1)
         return view.page() if view else None
 
     def close_tab(self, index):
@@ -917,13 +1014,119 @@ class LoggingSecureBrowser(QMainWindow):
         if self.tabs.count() == 1:
             self.current_view().setUrl(QUrl(self.settings["home_url"]))
             return
-        view = self.tabs.widget(index)
+        self.close_view(self.tabs.widget(index))
+
+    def close_view(self, view):
+        """탭을 닫고, 나중에 다시 열 수 있게 주소를 기억한다"""
+        index = self.tabs.indexOf(view)
+        if index < 0:
+            return
+        url = view.url().toString()
+        if url and url != "about:blank":
+            self.closed_tabs.append(url)
+            del self.closed_tabs[:-CLOSED_TABS_MAX]
         self.tabs.removeTab(index)
         view.deleteLater()
+
+    def close_other_tabs(self, keep_index):
+        keep = self.tabs.widget(keep_index)
+        for view in [v for v in self.tabs.views if v is not keep]:
+            self.close_view(view)
+
+    def close_tabs_to_right(self, index):
+        for view in self.tabs.views[index + 1:]:
+            self.close_view(view)
+
+    def reopen_closed_tab(self):
+        """Ctrl+Shift+T: 가장 최근에 닫은 탭을 다시 연다"""
+        if not self.closed_tabs:
+            self.status_bar.showMessage("다시 열 수 있는 탭이 없습니다.", 2500)
+            return
+        self.new_tab(self.closed_tabs.pop())
+
+    def show_tab_menu(self, index, global_pos):
+        """탭 우클릭 메뉴 (구성과 순서는 Chromium의 탭 메뉴를 따름)"""
+        view = self.tabs.widget(index)
+        if view is None:
+            return
+        menu = QMenu(self)
+        new_right = menu.addAction("오른쪽에 새 탭")
+        copy_url = menu.addAction("URL 복사")
+        reload_tab = menu.addAction("새로고침")
+        menu.addSeparator()
+        close_this = menu.addAction("탭 닫기")
+        close_others = menu.addAction("다른 탭 닫기")
+        close_right = menu.addAction("오른쪽 탭 닫기")
+        close_others.setEnabled(self.tabs.count() > 1)
+        close_right.setEnabled(index < self.tabs.count() - 1)
+        menu.addSeparator()
+        reopen = menu.addAction("닫은 탭 다시 열기")
+        reopen.setEnabled(bool(self.closed_tabs))
+        chosen = menu.exec(global_pos)
+        if chosen is new_right:
+            self.new_tab(index=index + 1)
+        elif chosen is copy_url:
+            QApplication.clipboard().setText(view.url().toString())
+        elif chosen is reload_tab:
+            view.reload()
+        elif chosen is close_this:
+            self.close_tab(index)
+        elif chosen is close_others:
+            self.close_other_tabs(index)
+        elif chosen is close_right:
+            self.close_tabs_to_right(index)
+        elif chosen is reopen:
+            self.reopen_closed_tab()
 
     def switch_tab(self, step):
         if self.tabs.count():
             self.tabs.setCurrentIndex((self.tabs.currentIndex() + step) % self.tabs.count())
+
+    def select_tab_number(self, number):
+        """Ctrl+1~8: 그 번호의 탭, Ctrl+9: 마지막 탭 (크롬과 같음)"""
+        count = self.tabs.count()
+        if count:
+            self.tabs.setCurrentIndex(count - 1 if number == 9 else min(number - 1, count - 1))
+
+    def toggle_fullscreen(self):
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+
+    def go_home(self):
+        view = self.current_view()
+        if view:
+            view.setUrl(QUrl(self.settings["home_url"]))
+
+    def hard_reload(self):
+        """Ctrl+Shift+R, Ctrl+F5: 캐시를 무시하고 새로고침"""
+        view = self.current_view()
+        if view:
+            view.triggerPageAction(QWebEnginePage.WebAction.ReloadAndBypassCache)
+
+    def find_again(self, backward):
+        """F3, Ctrl+G: 다음 찾기 / Shift+F3, Ctrl+Shift+G: 이전 찾기"""
+        if not self.find_bar.isVisible():
+            self.show_find_bar()
+        elif self.find_input.text():
+            self.find_text(self.find_input.text(), backward)
+
+    def clear_browsing_data(self):
+        """Ctrl+Shift+Delete: 방문 기록, 캐시, 쿠키를 모두 삭제"""
+        answer = QMessageBox.question(
+            self, "인터넷 사용 기록 삭제",
+            "방문 기록, 캐시, 쿠키(로그인 정보)를 모두 삭제할까요?\n북마크와 설정은 유지됩니다.")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.history = []
+        self.closed_tabs = []
+        self.save_data()
+        self.profile.clearHttpCache()
+        self.profile.cookieStore().deleteAllCookies()
+        self.refresh_suggestions()
+        self.add_log("인터넷 사용 기록 삭제 (방문 기록, 캐시, 쿠키)")
+        self.status_bar.showMessage("인터넷 사용 기록을 삭제했습니다.", 3000)
 
     def open_start_tabs(self):
         urls = []
@@ -1119,6 +1322,7 @@ class LoggingSecureBrowser(QMainWindow):
 
     def bookmarks_changed(self):
         self.refresh_bookmark_bar()
+        self.refresh_suggestions()
         view = self.current_view()
         if view:
             self.update_star(view.url().toString())

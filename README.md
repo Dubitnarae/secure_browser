@@ -21,6 +21,7 @@
 - **연결 상태 표시**: 주소 앞에 🔒(https) 또는 ⚠️(http, 암호화 안 됨)를 표시합니다.
 - **보안 로그**: 화면 오른쪽 로그 창과 `security.log` 파일에 기록됩니다. 1MB가 넘으면 새 파일로 교체하고 지난 파일 3개를 보관합니다.
 - **스마트 주소창**: 주소면 이동하고, 아니면 선택한 검색 엔진(구글·네이버·빙·덕덕고)으로 검색합니다.
+- **크롬과 같은 동작**: 닫은 탭 다시 열기, 탭 우클릭 메뉴, 가운데 버튼으로 탭 닫기, 주소창 추천(북마크·방문 기록)
 - **크롬과 비슷한 화면**: 위쪽 탭 줄, 둥근 주소창(🔒 연결 상태, ☆ 북마크 별), 북마크바, 불러오는 진행 표시, ⋮ 메뉴
 - 탭, 북마크, 방문 기록, 페이지 내 찾기, 확대·축소, 창 크기·마지막 탭 기억
 - 하루 한 번 새 버전 확인 (설정에서 끌 수 있음)
@@ -31,9 +32,18 @@
 | Ctrl+T / Ctrl+W | 새 탭 / 탭 닫기 |
 | Ctrl+Tab / Ctrl+Shift+Tab | 다음 / 이전 탭 |
 | Ctrl+L, F6 | 주소창으로 이동 |
-| F5 | 새로고침 |
+| F5, Ctrl+R | 새로고침 |
+| Ctrl+Shift+R, Ctrl+F5 | 캐시 무시 새로고침 |
+| Alt+Home | 시작 페이지로 |
+| F11 | 전체 화면 |
+| Ctrl+Shift+Delete | 방문 기록·캐시·쿠키 삭제 |
 | Alt+← / Alt+→ | 뒤로 / 앞으로 |
 | Ctrl+F | 페이지에서 찾기 (Esc로 닫기) |
+| F3, Ctrl+G / Shift+F3 | 다음 / 이전 찾기 |
+| Ctrl+Shift+T | 닫은 탭 다시 열기 |
+| Ctrl+1 ~ 8, Ctrl+9 | 번호로 탭 선택, 마지막 탭 |
+| Ctrl+PgUp / PgDn | 이전 / 다음 탭 |
+| Ctrl+Shift+PgUp / PgDn | 탭 순서 이동 |
 | Ctrl+D | 북마크 추가 / 삭제 |
 | Ctrl+H | 방문 기록 |
 | Ctrl+Shift+B | 북마크바 표시 / 숨김 |
@@ -53,11 +63,14 @@
 ## 소스에서 실행하고 빌드하기
 ```
 pip install PyQt6 PyQt6-WebEngine pyinstaller
-python "secure_browser v1.8.py"
+python "secure_browser v1.9.py"
 python test_core.py   # 핵심 기능 시험
 .\build.ps1
 ```
 `build.ps1`은 `dist\YD_Browser_v<버전>.zip`과 SHA256 파일을 만듭니다.
+
+## 참고
+단축키와 탭 메뉴 구성은 Chromium(BSD 라이선스) 공개 소스의 단축키 표를 참고했습니다. 코드를 복사하지는 않았습니다.
 
 ## 변경 내역
 [CHANGELOG.md](CHANGELOG.md)를 참고하세요.

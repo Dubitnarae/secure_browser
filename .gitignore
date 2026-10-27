@@ -14,3 +14,6 @@ settings.json.tmp
 security.log
 security.log.*
 error.log
+
+# 참고용 외부 프로그램 (재배포 금지)
+원프로그램/

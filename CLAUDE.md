@@ -1,9 +1,9 @@
 # YD Browser (secure_browser)
 
-PyQt6 + QtWebEngine으로 만든 Windows용 보안 브라우저. 현재 버전 v1.8 (화면은 크롬 라이트 테마 모방: `CHROME_QSS`, 탭 줄 `TabHost`). 개발자 표기: KIM YEONGDO (코드 `AUTHOR`, build.ps1 파일 속성, README, 설정 창). GitHub: Dubitnarae/secure_browser
+PyQt6 + QtWebEngine으로 만든 Windows용 보안 브라우저. 현재 버전 v1.9 (화면은 크롬 라이트 테마 모방: `CHROME_QSS`, 탭 줄 `TabHost`). 개발자 표기: KIM YEONGDO (코드 `AUTHOR`, build.ps1 파일 속성, README, 설정 창). GitHub: Dubitnarae/secure_browser
 
 ## 파일
-- `secure_browser v1.8.py` — 프로그램 전체 (파일명에 버전을 붙이고, 코드 안 `VERSION`도 같이 올린다. `build.ps1`이 둘이 다르면 중단함)
+- `secure_browser v1.9.py` — 프로그램 전체 (파일명에 버전을 붙이고, 코드 안 `VERSION`도 같이 올린다. `build.ps1`이 둘이 다르면 중단함)
 - `build.ps1` — exe 빌드 + `dist\YD_Browser_v<버전>.zip` + `.sha256` 생성 (`.\build.ps1`로 실행, ASCII만 사용)
 - `icon.ico` — 아이콘 (빌드에 포함)
 - `test_core.py` — 화면 없이 도는 핵심 기능 시험 (`python test_core.py`, 버전업 때 먼저 실행)
