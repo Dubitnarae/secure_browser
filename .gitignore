@@ -2,9 +2,14 @@ __pycache__/
 build/
 dist/
 *.spec
+*.zip
+*.sha256
 
-# 개인 데이터 (방문 기록·북마크·보안 로그)
+# 개인 데이터 (방문 기록·북마크·설정·보안 로그)
 browser_data.json
 browser_data.json.tmp
 browser_data.json.broken_*
+settings.json
+settings.json.tmp
 security.log
+security.log.*
