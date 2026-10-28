@@ -17,3 +17,7 @@ error.log
 
 # 참고용 외부 프로그램 (재배포 금지)
 원프로그램/
+
+# Claude Code 작업 안내 파일 (개인용, 커밋 제외)
+CLAUDE.md
+클로드.md
