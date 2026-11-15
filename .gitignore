@@ -1,7 +1,5 @@
-__pycache__/
-build/
 dist/
-*.spec
+selftest_out.txt
 *.zip
 *.sha256
 
@@ -14,6 +12,7 @@ settings.json.tmp
 security.log
 security.log.*
 error.log
+WebView2Data/
 
 # 참고용 외부 프로그램 (재배포 금지)
 원프로그램/

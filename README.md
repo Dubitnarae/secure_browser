@@ -1,15 +1,17 @@
 # YD Browser
 
-화면 캡처를 막고 보안 로그를 남기는 Windows용 간단한 웹 브라우저입니다. (PyQt6 + QtWebEngine)
+화면 캡처를 막고 보안 로그를 남기는 Windows용 간단한 웹 브라우저입니다. (C# + Microsoft Edge WebView2)
 
 개발자: **KIM YEONGDO**
 
 ## 설치와 실행
 1. [Releases](https://github.com/Dubitnarae/secure_browser/releases)에서 `YD_Browser_v<버전>.zip`을 내려받습니다.
-2. 압축을 풉니다. (폴더 전체가 한 세트이므로 `YD_Browser.exe`만 따로 옮기면 안 됩니다)
+2. 압축을 풉니다. (`YD_Browser.exe`와 DLL 3개가 한 세트이므로 exe만 따로 옮기면 안 됩니다)
 3. `YD_Browser.exe`를 실행합니다.
 
-방문 기록·북마크·설정·로그는 `YD_Browser.exe`와 같은 폴더에 저장됩니다.
+방문 기록·북마크·설정·로그는 `YD_Browser.exe`와 같은 폴더에 저장됩니다. 웹 캐시·쿠키는 같은 폴더의 `WebView2Data`에 저장됩니다.
+
+웹 화면은 Windows 10/11에 들어 있는 **Microsoft Edge WebView2 런타임**을 씁니다. 없다는 안내가 나오면 Microsoft 누리집에서 'WebView2 런타임'을 설치하세요.
 
 ## 주요 기능
 - **화면 캡처 방지**: 창이 캡처·화면 공유에서 제외됩니다. (Windows 10 2004 이상. 그보다 낮은 버전에서는 캡처 화면이 검게 나옵니다)
@@ -60,17 +62,16 @@
 - Win+Shift+S 같은 Windows 기본 캡처 단축키는 감지하지 못합니다. (캡처 방지로 화면은 보호됩니다)
 - 새 버전 확인은 GitHub에 접속합니다. 접속을 원하지 않으면 설정에서 끄세요.
 
-## 소스에서 실행하고 빌드하기
+## 빌드하기
+Windows에 들어 있는 C# 컴파일러(.NET Framework 4.x)로 빌드하므로 따로 설치할 것이 없습니다. WebView2 SDK DLL은 `lib` 폴더에 들어 있습니다.
 ```
-pip install PyQt6 PyQt6-WebEngine pyinstaller
-python "secure_browser v1.9.py"
-python test_core.py   # 핵심 기능 시험
 .\build.ps1
 ```
-`build.ps1`은 `dist\YD_Browser_v<버전>.zip`과 SHA256 파일을 만듭니다.
+`build.ps1`은 컴파일한 뒤 자체 시험(`YD_Browser.exe --selftest`)을 돌리고, `dist\YD_Browser_v<버전>.zip`과 SHA256 파일을 만듭니다.
 
 ## 참고
-단축키와 탭 메뉴 구성은 Chromium(BSD 라이선스) 공개 소스의 단축키 표를 참고했습니다. 코드를 복사하지는 않았습니다.
+- 웹 화면: Microsoft Edge WebView2 SDK (`lib\WebView2_LICENSE.txt`)
+- 단축키와 탭 메뉴 구성은 Chromium(BSD 라이선스) 공개 소스의 단축키 표를 참고했습니다. 코드를 복사하지는 않았습니다.
 
 ## 변경 내역
 [CHANGELOG.md](CHANGELOG.md)를 참고하세요.
